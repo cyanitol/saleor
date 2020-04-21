@@ -843,6 +843,12 @@ PRODUCT_VARIANT_BULK_CREATE_MUTATION = """
             productVariants{
                 id
                 sku
+                stocks {
+                    warehouse {
+                        slug
+                    }
+                    quantity
+                }
             }
             count
         }
@@ -966,6 +972,88 @@ def test_product_variant_bulk_create_with_new_attribute_value(
     assert data["count"] == 2
     assert product_variant_count + 2 == ProductVariant.objects.count()
     assert attribute_value_count + 1 == size_attribute.values.count()
+
+
+def test_product_variant_bulk_create_stocks_input(
+    staff_api_client, product, permission_manage_products, warehouses, size_attribute
+):
+    product_variant_count = ProductVariant.objects.count()
+    product_id = graphene.Node.to_global_id("Product", product.pk)
+    attribute_value_count = size_attribute.values.count()
+    size_attribute_id = graphene.Node.to_global_id("Attribute", size_attribute.pk)
+    attribute_value = size_attribute.values.last()
+    variants = [
+        {
+            "sku": str(uuid4())[:12],
+            "stocks": [
+                {
+                    "quantity": 10,
+                    "warehouse": graphene.Node.to_global_id(
+                        "Warehouse", warehouses[0].pk
+                    ),
+                }
+            ],
+            "attributes": [{"id": size_attribute_id, "values": [attribute_value.name]}],
+        },
+        {
+            "sku": str(uuid4())[:12],
+            "attributes": [{"id": size_attribute_id, "values": ["Test-attribute"]}],
+            "stocks": [
+                {
+                    "quantity": 15,
+                    "warehouse": graphene.Node.to_global_id(
+                        "Warehouse", warehouses[0].pk
+                    ),
+                },
+                {
+                    "quantity": 15,
+                    "warehouse": graphene.Node.to_global_id(
+                        "Warehouse", warehouses[1].pk
+                    ),
+                },
+            ],
+        },
+    ]
+
+    variables = {"productId": product_id, "variants": variants}
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_graphql(
+        PRODUCT_VARIANT_BULK_CREATE_MUTATION, variables
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["productVariantBulkCreate"]
+    assert not data["bulkProductErrors"]
+    assert data["count"] == 2
+    assert product_variant_count + 2 == ProductVariant.objects.count()
+    assert attribute_value_count + 1 == size_attribute.values.count()
+
+    expected_result = [
+        {
+            "sku": variants[0]["sku"],
+            "stocks": [
+                {
+                    "warehouse": {"slug": warehouses[0].slug},
+                    "quantity": variants[0]["stocks"][0]["quantity"],
+                }
+            ],
+        },
+        {
+            "sku": variants[1]["sku"],
+            "stocks": [
+                {
+                    "warehouse": {"slug": warehouses[0].slug},
+                    "quantity": variants[1]["stocks"][0]["quantity"],
+                },
+                {
+                    "warehouse": {"slug": warehouses[1].slug},
+                    "quantity": variants[1]["stocks"][1]["quantity"],
+                },
+            ],
+        },
+    ]
+    for variant_data in data["productVariants"]:
+        variant_data.pop("id")
+        assert variant_data in expected_result
 
 
 def test_product_variant_bulk_create_duplicated_sku(
